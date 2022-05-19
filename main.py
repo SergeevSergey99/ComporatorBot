@@ -1,5 +1,6 @@
 import json
 
+from telebot import types
 from telebot.async_telebot import AsyncTeleBot
 from datetime import datetime
 import googleSheets
@@ -8,7 +9,7 @@ from lxml import html
 import creds.info
 TOKEN = creds.info.TELGRAM_TOKEN
 bot = AsyncTeleBot(TOKEN)
-
+import time
 import asyncio
 from pyppeteer import launch
 
@@ -27,14 +28,35 @@ with open('data.json', 'r', encoding='utf-8') as f:
 start_parm = {
     # Начать хромированный путь
     "executablePath": r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+    "userDataDir": r"C:\Users\Сергей\AppData\Local\Google\Chrome\User Data",
     # Закройте браузер без заголовка По умолчанию запускается без заголовка
     "headless": False,
+    #"devtools ": True
 }
+def tryXPath(page, tree, path):
+    try:
+        el = tree.xpath(path)
+    except Exception:
+        time.sleep(3)
+        try:
+            page_content = await page.content()
+            tree = html.fromstring(page_content)
+            el = tree.xpath('xpath')
+
+        except Exception:
+            print("Не удалось загрузить " + path)
+            return []
+    return el
 
 async def get_Prices() -> str:
     # Launch the browser
     browser = await launch(**start_parm)
 
+    """
+    await browser._connection.send('Browser.setPermission', {
+        'permission': 'geolocation',
+        'setting': 'granted'
+    })"""
 
     fulstr = "База обновлена вот все обнаруженные цены:\n"
     for currType in products:
@@ -48,28 +70,32 @@ async def get_Prices() -> str:
 
             # Open a new browser page
             page = await browser.newPage()
-            cdp = await page.target.createCDPSession()
-
-            await cdp.send('Target.createBrowserContext')
 
             page.setDefaultNavigationTimeout(0)
             # Create a URI for our test file
             page_path = i['url']
 
-
             await page.goto(page_path)
             page_content = await page.content()
             tree = html.fromstring(page_content)
-            try:
 
-                el = tree.xpath(i['xpath'])
+            el = tryXPath(page, tree, i['xpath'])
+            if len(el) == 0:
+                el = tryXPath(page, tree, i['xpath2'])
+            if len(el) == 0:
+                el = tryXPath(page, tree, i['xpath3'])
 
-                if len(el) > 0:
+            if len(el) > 0:
+                print(type(el[0]))
+                try:
                     print(el[0].text)
                     i['price'] = el[0].text
-                    smallstr +="Название: " + i['Название'] + "\nСтоимость: " + el[0].text + "\nМагазин: " + i['Магазин'] + "\n\n"
-            except Exception:
-                print("Не удалось загрузить " + i['Название'])
+                except Exception:
+                    print(el[0])
+                    i['price'] = el[0]
+
+                smallstr +="Название: " + i['Название'] + "\nСтоимость: " + i['price'] + "\nМагазин: " + i['Магазин'] + "\n\n"
+
             await page.close()
 
         if len(smallstr) > 0:
@@ -82,6 +108,7 @@ async def get_Prices() -> str:
         json.dump(products, fp=fp, ensure_ascii=False, indent=2)
 
     return fulstr
+
 
 def get_PricesOfType(type: str) -> str:
     # Launch the browser
@@ -97,7 +124,6 @@ def get_PricesOfType(type: str) -> str:
     return fulstr
 
 
-
 @bot.message_handler(commands=['milk'])
 async def milk_handler(message):
 
@@ -111,16 +137,31 @@ async def milkShake_handler(message):
     await bot.send_message(message.chat.id, get_PricesOfType("Молочные коктели"))
 
 
+@bot.message_handler(commands=['help'])
+async def milkShake_handler(message):
+
+    print("help")
+
+    tmpstr = ""
+    if str(message.from_user.id) == "131856094":
+        tmpstr = "/update - обновление базы данных\n"
+    await bot.send_message(message.chat.id, tmpstr + "/milk - информация о молоке коктелях\n"
+                                            "/milkShake - информация о молочных коктелях\n")
+
+
 @bot.message_handler(commands=['start'])
 async def start_handler(message):
 
-    await bot.send_message(message.chat.id, "Start")
+    await bot.send_message(message.chat.id, "Start\nИспользуйте /help")
 
 from datetime import timedelta
 @bot.message_handler(commands=['update'])
 async def update_base(message):
 
     print("update")
+    if str(message.from_user.id) != "131856094":
+        return
+    print("admin update")
 
     await bot.send_message(message.chat.id, "Обновляем базу")
     lists = googleSheets.GetBase()
@@ -149,11 +190,10 @@ async def update_base(message):
         await bot.send_message(message.chat.id, "Что то пошло не так")
 
 @bot.message_handler(content_types=['text'])
-def text_handler(message):
+async def text_handler(message):
     print("id: \"" + str(message.from_user.id) + "\"\tusername: \"" + str(message.from_user.username) +
           "\"\tname: \"" + str(message.from_user.first_name) + " " + str(message.from_user.last_name)
           + "\"\ttext: \"" + str(message.text) + "\"\t\tdate: " + datetime.fromtimestamp((message.date)).strftime("%A, %B %d, %Y %I:%M:%S"))
-
 
 asyncio.run(bot.polling())
 
